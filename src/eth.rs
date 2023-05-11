@@ -205,7 +205,13 @@ pub async fn deploy_verifier<M: 'static + Middleware>(
     // sol code supercedes deployment code
     let factory = match sol_code_path {
         Some(path) => {
-            let compiled = Solc::default().compile_source(path).unwrap();
+            let compiled = Solc::default()
+                .arg("--ir-optimized")
+                .arg("--optimize")
+                .arg("--optimize-runs")
+                .arg("1")
+                .compile_source(path)
+                .unwrap();
             let (abi, bytecode, _runtime_bytecode) = compiled
                 .find("Verifier")
                 .expect("could not find contract")
