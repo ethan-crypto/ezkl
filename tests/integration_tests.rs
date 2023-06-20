@@ -1578,7 +1578,7 @@ macro_rules! test_func {
 
         let status = Command::new(format!("{}/release/ezkl", *CARGO_TARGET_DIR))
             .args([
-                "create-evm-data-attestation-verifier",
+                "create-evm-da-verifier",
                 circuit_settings.as_str(),
                 "--sol-code-path",
                 sol_arg.as_str(),
@@ -1621,7 +1621,6 @@ macro_rules! test_func {
             .expect("failed to execute process");
         assert!(!status.success());
     }
-
 
     fn build_ezkl() {
         let status = Command::new("cargo")
