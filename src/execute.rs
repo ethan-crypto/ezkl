@@ -3,13 +3,11 @@ use crate::circuit::CheckMode;
 use crate::commands::{CalibrationTarget, StrategyType};
 use crate::commands::{Cli, Commands, RunArgs};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::eth::{fix_verifier_sol, verify_proof_with_data_attestation, 
-    read_on_chain_inputs, get_contract_artifacts, verify_proof_via_solidity, evm_quantize,
-    setup_eth_backend, test_on_chain_inputs
-};
+use crate::eth::{fix_verifier_sol, verify_proof_with_data_attestation, get_contract_artifacts, verify_proof_via_solidity};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::graph::Visibility;
 use crate::graph::{scale_to_multiplier, GraphCircuit, GraphInput, GraphSettings, Model};
+use crate::graph::input::DataSource;
 use crate::pfsys::evm::aggregation::{AggregationCircuit, PoseidonTranscript};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::pfsys::evm::evm_verify;
@@ -93,7 +91,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             num_runs,
             args,
             settings_path,
-        ),
+        ).await,
         Commands::GenSrs { srs_path, logrows } => gen_srs_cmd(srs_path, logrows as u32),
         Commands::Table { model, args } => table(model, args),
         #[cfg(feature = "render")]
@@ -126,7 +124,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             model,
             data,
             settings_path,
-        } => mock(model, data, settings_path),
+        } => mock(model, data, settings_path).await,
         #[cfg(not(target_arch = "wasm32"))]
         Commands::CreateEVMVerifier {
             vk_path,
@@ -197,7 +195,9 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             strategy,
             settings_path,
             check_mode,
-            test_reads
+            test_on_chain_data_path,
+            test_onchain_inputs,
+            test_onchain_outputs
         } => prove(
             data,
             model,
@@ -208,7 +208,9 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             strategy,
             settings_path,
             check_mode,
-            test_reads
+            test_on_chain_data_path,
+            test_onchain_inputs,
+            test_onchain_outputs
         ).await,
         Commands::Aggregate {
             settings_paths,
@@ -414,7 +416,13 @@ pub(crate) fn forward(
     let mut circuit =
         GraphCircuit::from_settings(&circuit_settings, &model_path, CheckMode::UNSAFE)?;
     let mut data = GraphInput::from_path(data)?;
-    circuit.load_inputs(&data);
+
+    let file_data = match data.input_data {
+        DataSource::File(ref data) => data.clone(),
+        _ => todo!(),
+    };
+
+    circuit.load_file_inputs(&file_data);
 
     let res = circuit.forward()?;
 
@@ -435,7 +443,7 @@ pub(crate) fn forward(
         .map(|(t, scale)| t.iter().map(|e| ((*e as f64 / scale) as f32)).collect_vec())
         .collect();
     trace!("forward pass output: {:?}", float_res);
-    data.output_data = float_res;
+    data.output_data = DataSource::File(float_res);
     data.processed_inputs = res.processed_inputs;
     data.processed_params = res.processed_params;
     data.processed_outputs = res.processed_outputs;
@@ -538,7 +546,12 @@ pub(crate) fn calibrate(
                     )
                     .map_err(|_| "failed to create circuit from run args")?;
 
-                    circuit.load_inputs(chunk);
+                    let chunk = match chunk.input_data {
+                        DataSource::File(ref data) => data.clone(),
+                        _ => todo!(),
+                    };
+
+                    circuit.load_file_inputs(&chunk);
 
                     loop {
                         //
@@ -623,9 +636,9 @@ pub(crate) fn calibrate(
     Ok(())
 }
 
-pub(crate) fn mock(
+pub(crate) async fn mock(
     model_path: PathBuf,
-    data: PathBuf,
+    data_path: PathBuf,
     settings_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     // mock should catch any issues by default so we set it to safe
@@ -633,9 +646,9 @@ pub(crate) fn mock(
     let circuit_settings = GraphSettings::load(&settings_path)?;
     let mut circuit = GraphCircuit::from_settings(&circuit_settings, &model_path, CheckMode::SAFE)?;
 
-    let data = GraphInput::from_path(data)?;
-    circuit.load_inputs(&data);
-    let public_inputs = circuit.prepare_public_inputs(&data, None)?;
+    let data = GraphInput::from_path(data_path.clone())?;
+    circuit.load_inputs(&data).await?;
+    let public_inputs = circuit.prepare_public_inputs(&data, None, false, false).await?;
 
     info!("Mock proof");
 
@@ -892,6 +905,7 @@ pub(crate) fn setup(
     Ok(())
 }
 
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn prove(
     data_path: PathBuf,
@@ -903,43 +917,21 @@ pub(crate) async fn prove(
     strategy: StrategyType,
     settings_path: PathBuf,
     check_mode: CheckMode,
+    test_on_chain_data_path: Option<PathBuf>,
     test_onchain_input: bool,
+    test_onchain_output: bool
 ) -> Result<(), Box<dyn Error>> {
+    let data = GraphInput::from_path(data_path)?;
     use crate::pfsys::load_pk;
-
-    let data = GraphInput::from_path(data_path.clone())?;
     let circuit_settings = GraphSettings::load(&settings_path)?;
     let mut circuit = GraphCircuit::from_settings(&circuit_settings, &model_path, check_mode)?;
-    let public_inputs = if circuit.settings.run_args.on_chain_inputs {
-        let scale = circuit.settings.run_args.scale;
-        if test_onchain_input {
-            // Set up local anvil instance for reading on-chain data
-            let (anvil, client) = setup_eth_backend(None).await?;
-            let calls_to_accounts = test_on_chain_inputs(client.clone(), &data, data_path, anvil.endpoint()).await?;
-            info!("Calls to accounts: {:?}", calls_to_accounts);
-            let inputs = read_on_chain_inputs(client.clone(), client.address(), &calls_to_accounts).await?;
-            info!("Inputs: {:?}", inputs);
-            let quantized_evm_inputs = evm_quantize(client, scale_to_multiplier(scale), &inputs).await?;
-            drop(anvil);
-            circuit.prepare_public_inputs(&data, Some(vec![quantized_evm_inputs]))?
-        } else if let Some((calls_to_accounts, rpc_url)) = &data.on_chain_input_data {
-            // Set up anvil instance for reading on-chain data from RPC URL endpoint provided in data
-            let (anvil, client) = setup_eth_backend(Some(rpc_url)).await?;
-            let inputs = read_on_chain_inputs(client.clone(), client.address(), calls_to_accounts).await?;
-            drop(anvil);
-            // Set up local anvil instance for deploying QuantizeData.sol
-            let (anvil, client) = setup_eth_backend(None).await?;
-            let quantized_evm_inputs = evm_quantize(client, scale_to_multiplier(scale), &inputs).await?;
-            drop(anvil);
-            circuit.prepare_public_inputs(&data, Some(vec![quantized_evm_inputs]))?
-        } else {
-            panic!("No on_chain_input_data field found in .json data file")
-        }
-    } else {
-        circuit.prepare_public_inputs(&data, None)?
-    };
+    let public_inputs = circuit.prepare_public_inputs(
+        &data,
+        test_on_chain_data_path,
+        test_onchain_input,
+        test_onchain_output
+    ).await?;
     
-
     let circuit_settings = circuit.settings.clone();
 
     let params = load_params_cmd(srs_path, circuit_settings.run_args.logrows)?;
@@ -991,10 +983,10 @@ pub(crate) async fn prove(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn fuzz(
+pub(crate) async fn fuzz(
     model_path: PathBuf,
     logrows: u32,
-    data: PathBuf,
+    data_path: PathBuf,
     transcript: TranscriptType,
     num_runs: usize,
     run_args: RunArgs,
@@ -1007,7 +999,7 @@ pub(crate) fn fuzz(
     let _r = Gag::stdout().unwrap();
     let params = gen_srs::<KZGCommitmentScheme<Bn256>>(logrows);
 
-    let data = GraphInput::from_path(data)?;
+    let data = GraphInput::from_path(data_path.clone())?;
     // these aren't real values so the sanity checks are mostly meaningless
     let mut circuit = match settings_path {
         Some(path) => {
@@ -1020,7 +1012,7 @@ pub(crate) fn fuzz(
     let pk = create_keys::<KZGCommitmentScheme<Bn256>, Fr, GraphCircuit>(&circuit, &params)
         .map_err(Box::<dyn Error>::from)?;
 
-    let public_inputs = circuit.prepare_public_inputs(&data, None)?;
+    let public_inputs = circuit.prepare_public_inputs(&data, None, false, false).await?;
 
     let strategy = KZGSingleStrategy::new(&params);
     std::mem::drop(_r);

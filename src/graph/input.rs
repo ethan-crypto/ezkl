@@ -19,7 +19,6 @@ type RPCUrl = String;
 /// This data will be included as part of the first elements in the publicInputs
 /// for the sol evm verifier and will be  verifyWithDataAttestation.sol
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
-
 pub struct CallsToAccount {
     /// A vector of tuples, where index 0 of tuples
     /// are the byte strings representing the ABI encoded function calls to 
@@ -31,15 +30,30 @@ pub struct CallsToAccount {
     /// Address of the contract to read the data from.
     pub address: String,
 }
+/// Enum that defines source of the inputs/outputs to the EZKL model
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DataSource {
+    /// On-chain data source. The first element is the calls to the account, and the second is the RPC url.
+    OnChain(Vec<CallsToAccount>, RPCUrl),
+    /// .json File data source.
+    File(Vec<Vec<f32>>)
+}
+impl Default for DataSource {
+    fn default() -> Self {
+        DataSource::File(
+            vec![vec![]]
+        )
+    }
+}
 /// The input tensor data and shape, and output data for the computational graph (model) as floats.
 /// For example, the input might be the image data for a neural network, and the output class scores.
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct GraphInput {
     /// Inputs to the model / computational graph (can be empty vectors if inputs are coming from on-chain).
     /// TODO: Add retrieve from on-chain functionality
-    pub input_data: Vec<Vec<f32>>, 
+    pub input_data: DataSource, 
     /// The expected output of the model (can be empty vectors if outputs are not being constrained).
-    pub output_data: Vec<Vec<f32>>,
+    pub output_data: DataSource,
     /// Optional hashes of the inputs (can be None if there are no commitments). Wrapped as Option for backwards compatibility
     pub processed_inputs: Option<ModuleForwardResult>,
     /// Optional hashes of the params (can be None if there are no commitments). Wrapped as Option for backwards compatibility
@@ -52,7 +66,7 @@ pub struct GraphInput {
 
 impl GraphInput {
     ///
-    pub fn new(input_data: Vec<Vec<f32>>, output_data: Vec<Vec<f32>>) -> Self {
+    pub fn new(input_data: DataSource, output_data: DataSource) -> Self {
         GraphInput {
             input_data,
             output_data,
@@ -72,21 +86,26 @@ impl GraphInput {
         // split input data into batches
         let mut batched_inputs = vec![];
 
-        for (i, input) in self.input_data.iter().enumerate() {
-            // ensure the input is devenly divisible by batch_size
-            if input.len() % batch_size != 0 {
-                return Err(Box::new(GraphError::InvalidDims(
-                    0,
-                    "input data length must be evenly divisible by batch size".to_string(),
-                )));
-            }
-            let input_size = input_shapes[i].clone().iter().product::<usize>();
-            let mut batches = vec![];
-            for batch in input.chunks(batch_size * input_size) {
-                batches.push(batch.to_vec());
-            }
-            batched_inputs.push(batches);
-        }
+        match &self.input_data {
+            DataSource::File(input_data) => {
+                for (i, input) in input_data.iter().enumerate() {
+                    // ensure the input is devenly divisible by batch_size
+                    if input.len() % batch_size != 0 {
+                        return Err(Box::new(GraphError::InvalidDims(
+                            0,
+                            "input data length must be evenly divisible by batch size".to_string(),
+                        )));
+                    }
+                    let input_size = input_shapes[i].clone().iter().product::<usize>();
+                    let mut batches = vec![];
+                    for batch in input.chunks(batch_size * input_size) {
+                        batches.push(batch.to_vec());
+                    }
+                    batched_inputs.push(batches)
+                }
+            },
+            DataSource::OnChain(_, _) => panic!("Only File data sources support batching")
+        };
         // now merge all the batches for each input into a vector of batches
         // first assert each input has the same number of batches
         let num_batches = batched_inputs[0].len();
@@ -106,22 +125,27 @@ impl GraphInput {
         // split output data into batches
         let mut batched_outputs = vec![];
 
-        for (i, output) in self.output_data.iter().enumerate() {
-            // ensure the input is devenly divisible by batch_size
-            if output.len() % batch_size != 0 {
-                return Err(Box::new(GraphError::InvalidDims(
-                    0,
-                    "input data length must be evenly divisible by batch size".to_string(),
-                )));
-            }
-
-            let output_size = output_shapes[i].clone().iter().product::<usize>();
-            let mut batches = vec![];
-            for batch in output.chunks(batch_size * output_size) {
-                batches.push(batch.to_vec());
-            }
-            batched_outputs.push(batches);
-        }
+        match &self.output_data {
+            DataSource::File(output_data) => {
+                for (i, output) in output_data.iter().enumerate() {
+                    // ensure the input is devenly divisible by batch_size
+                    if output.len() % batch_size != 0 {
+                        return Err(Box::new(GraphError::InvalidDims(
+                            0,
+                            "output data length must be evenly divisible by batch size".to_string(),
+                        )));
+                    }
+        
+                    let output_size = output_shapes[i].clone().iter().product::<usize>();
+                    let mut batches = vec![];
+                    for batch in output.chunks(batch_size * output_size) {
+                        batches.push(batch.to_vec());
+                    }
+                    batched_outputs.push(batches);
+                }
+            },
+            DataSource::OnChain(_, _) => panic!("Only File data sources support batching")
+        };
 
         // now merge all the batches for each output into a vector of batches
         // first assert each output has the same number of batches
@@ -143,7 +167,7 @@ impl GraphInput {
         let batches = input_batches
             .into_iter()
             .zip(output_batches.into_iter())
-            .map(|(input, output)| GraphInput::new(input, output))
+            .map(|(input, output)| GraphInput::new(DataSource::File(input), DataSource::File(output)))
             .collect::<Vec<GraphInput>>();
 
         Ok(batches)
@@ -292,24 +316,42 @@ impl GraphInput {
     }
 }
 
+/// Enum that defines source of the inputs/outputs to the EZKL model
+/// used for f32 to f64 conversion
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum DataSourceF64 {
+    OnChain(Vec<CallsToAccount>, RPCUrl),
+    File(Vec<Vec<f64>>)
+}
+
 impl Serialize for GraphInput {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("GraphInput", 4)?;
-        let input_data_f64: Vec<Vec<f64>> = self
-            .input_data
-            .iter()
-            .map(|v| v.iter().map(|&f| f as f64).collect())
-            .collect();
-        let output_data_f64: Vec<Vec<f64>> = self
-            .output_data
-            .iter()
-            .map(|v| v.iter().map(|&f| f as f64).collect())
-            .collect();
-        state.serialize_field("input_data", &input_data_f64)?;
-        state.serialize_field("output_data", &output_data_f64)?;
+        let input_data = match self.input_data.clone() {
+            DataSource::File(data) => {
+                let data = data
+                    .iter()
+                    .map(|v| v.iter().map(|&f| f as f64).collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+                DataSourceF64::File(data)
+            }
+            DataSource::OnChain(data,url) => DataSourceF64::OnChain(data, url)
+        };
+        let output_data = match self.output_data.clone() {
+            DataSource::File(data) => {
+                let data = data
+                    .iter()
+                    .map(|v| v.iter().map(|&f| f as f64).collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+                DataSourceF64::File(data)
+            }
+            DataSource::OnChain(data,url) => DataSourceF64::OnChain(data, url)
+        };
+        state.serialize_field("input_data", &input_data)?;
+        state.serialize_field("output_data", &output_data)?;
 
         if let Some(processed_inputs) = &self.processed_inputs {
             state.serialize_field("processed_inputs", &processed_inputs)?;

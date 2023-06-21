@@ -428,10 +428,19 @@ pub enum Commands {
         /// run sanity checks during calculations (safe or unsafe)
         #[arg(long, default_value = "safe")]
         check_mode: CheckMode,
+        /// For testing purposes only. The optional path to the .json data file that will be generated that contains the OnChain data storage information
+        /// derived from the file information in the data .json file.
+        ///  Should include both the network input (possibly private) and the network output (public input to the proof)
+        #[arg(short = 'D', long)]
+        test_on_chain_data_path: Option<PathBuf>,
         /// Deploy a test contract that stores the input_data in data .json in its storage,
-        /// then reads from it. 
+        /// then reads from it. For testing purposes only.
         #[arg(long, default_value = "false", action = clap::ArgAction::Set)]
-        test_reads: bool,
+        test_onchain_inputs: bool,
+        /// Deploy a test contract that stores the output_data in data .json in its storage,
+        /// then reads from it. For testing purposes only.
+        #[arg(long, default_value = "false", action = clap::ArgAction::Set)]
+        test_onchain_outputs: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     /// Creates an EVM verifier for a single proof

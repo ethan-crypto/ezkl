@@ -1,4 +1,4 @@
-use crate::graph::input::{GraphInput, CallsToAccount};
+use crate::graph::input::{GraphInput, CallsToAccount, DataSource};
 use crate::pfsys::evm::{DeploymentCode, EvmVerificationError};
 use crate::pfsys::Snark;
 use ethers::prelude::ContractInstance;
@@ -167,7 +167,7 @@ fn count_decimal_places(num: f32) -> usize {
 ///
 pub async fn setup_test_contract<M: 'static + Middleware>(
     client: Arc<M>,
-    data: &GraphInput,
+    data: &Vec<Vec<f32>>,
 ) -> Result<(ContractInstance<Arc<M>, M>, Vec<u8>), Box<dyn Error>> {
 
     let factory = get_sol_contract_factory(
@@ -178,7 +178,7 @@ pub async fn setup_test_contract<M: 'static + Middleware>(
 
     let mut decimals = vec![];
     let mut scaled_by_decimals_data = vec![];
-    for input in &data.input_data[0] {
+    for input in &data[0] {
         let decimal_places = count_decimal_places(*input) as u8;
         let scaled_by_decimals = input*f32::powf(10., decimal_places.into());
         scaled_by_decimals_data.push(scaled_by_decimals as u128);
@@ -189,7 +189,8 @@ pub async fn setup_test_contract<M: 'static + Middleware>(
     Ok((contract, decimals))
 }
 
-/// Verify a proof using a Solidity DataAttestationVerifier contract
+/// Verify a proof using a Solidity DataAttestationVerifier contract.
+/// Used for testing purposes.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn verify_proof_with_data_attestation(
     proof: Snark<Fr, G1Affine>,
@@ -201,7 +202,12 @@ pub async fn verify_proof_with_data_attestation(
     
     let data = GraphInput::from_path(data)?;
 
-    let (contract, _) = setup_test_contract(client.clone(), &data).await?;
+    let input_data = match data.input_data.clone() {
+        DataSource::OnChain(_, _) => panic!("Data source must come from File"),
+        DataSource::File(input_data) => input_data,
+    };
+
+    let (contract, _) = setup_test_contract(client.clone(), &input_data).await?;
 
     info!("contract address: {:#?}", contract.address());
 
@@ -290,24 +296,23 @@ pub fn get_provider(rpc_url: &str) -> Result<Provider<Http>, Box<dyn Error>> {
     Ok(provider)
 }
 
-/// Tests on-chain inputs by deploying a contract that stores the data.input_data in its storage
-pub async fn test_on_chain_inputs<M: 'static + Middleware>(
+/// Tests on-chain data storage by deploying a contract that stores the network input and or output 
+/// data in its storage. It does this by converting the floating point values to integers and storing the 
+/// the number of decimals of the floating point value on chain.
+pub async fn test_on_chain_data<M: 'static + Middleware>(
     client: Arc<M>,
-    data: &GraphInput,
-    data_path: PathBuf,
-    endpoint: String,
+    data: &Vec<Vec<f32>>
 ) -> Result<Vec<CallsToAccount>, Box<dyn Error>> {
 
     let (contract, decimals) = setup_test_contract(client.clone(), data).await?;
 
     abigen!(TestReads, "./abis/TestReads.json");
 
-
     let contract = TestReads::new(contract.address(), client.clone());
 
     // Get the encoded call data for each input
     let mut calldata = vec![];
-    for(i, _) in data.input_data[0].iter().enumerate() {
+    for(i, _) in data[0].iter().enumerate() {
         let function = contract.method::<_, U256>("arr", i as u32).unwrap();
         let call = function.calldata().unwrap();
         // Push (call, decimals) to the calldata vector, and set the decimals to 0.
@@ -319,13 +324,7 @@ pub async fn test_on_chain_inputs<M: 'static + Middleware>(
         address: hex::encode(contract.address().as_bytes())
     };
     info!("calls_to_account: {:#?}", calls_to_account);
-    let calls_to_accounts = vec![calls_to_account];
-    // Fill the on_chain_input_data field of the GraphInput struct
-    let mut data = data.clone();
-    data.on_chain_input_data = Some((calls_to_accounts.clone(), endpoint));
-    // Save the updated GraphInput struct to the data_path
-    data.save(data_path)?;
-    Ok(calls_to_accounts)
+    Ok(vec![calls_to_account])
 }
 
 
@@ -367,7 +366,7 @@ pub async fn read_on_chain_inputs<M: 'static + Middleware>(
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn evm_quantize <M: 'static + Middleware>(
     client: Arc<M>,
-    scale: f64,
+    scales: Vec<f64>,
     data: &(Vec<ethers::types::Bytes>, Vec<u8>),
 )-> Result<Vec<i128>, Box<dyn Error>> {
 
@@ -397,11 +396,16 @@ pub async fn evm_quantize <M: 'static + Middleware>(
         .map(|x| U256::from_dec_str(&x.to_string()))
         .collect::<Result<Vec<U256>, _>>()?;
 
+    let scales = scales
+        .iter()
+        .map(|x| U256::from_dec_str(&x.to_string()))
+        .collect::<Result<Vec<U256>, _>>()?;
+
     let results = contract
         .quantize_data(
             fetched_inputs, 
             decimals,
-            U256::from_dec_str(&scale.to_string())?
+            scales
         )
         .call()
         .await;

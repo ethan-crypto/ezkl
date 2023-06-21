@@ -9,10 +9,12 @@ mod native_tests {
     use std::process::Command;
     use std::sync::Once;
     use tempdir::TempDir;
+    use ezkl_lib::graph::DataSource;
     static COMPILE: Once = Once::new();
     static KZG17: Once = Once::new();
     static KZG23: Once = Once::new();
     static KZG26: Once = Once::new();
+
     //Sure to run this once
 
     lazy_static! {
@@ -113,19 +115,30 @@ mod native_tests {
             let data = GraphInput::from_path(format!("{}/{}/input.json", test_dir, test).into())
                 .expect("failed to load input data");
 
-            let duplicated_input_data: Vec<Vec<f32>> = data
-                .input_data
+            let input_data = match data.input_data {
+                DataSource::File(data) => data,
+                DataSource::OnChain(_, _) => panic!("Only File data sources support batching"),
+            };
+
+            let output_data = match data.output_data {
+                DataSource::File(data) => data,
+                DataSource::OnChain(_, _) => panic!("Only File data sources support batching"),
+            };
+
+            let duplicated_input_data: Vec<Vec<f32>> = input_data
                 .iter()
                 .map(|data| (0..num_batches).flat_map(|_| data.clone()).collect())
                 .collect();
 
-            let duplicated_output_data: Vec<Vec<f32>> = data
-                .output_data
+            let duplicated_output_data: Vec<Vec<f32>> = output_data
                 .iter()
                 .map(|data| (0..num_batches).flat_map(|_| data.clone()).collect())
                 .collect();
 
-            let duplicated_data = GraphInput::new(duplicated_input_data, duplicated_output_data);
+            let duplicated_data = GraphInput::new(
+                DataSource::File(duplicated_input_data), 
+                DataSource::File(duplicated_output_data)
+            );
 
             let res =
                 duplicated_data.save(format!("{}/{}/input.json", test_dir, output_dir).into());
