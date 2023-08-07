@@ -1,13 +1,12 @@
 use crate::circuit::modules::poseidon::spec::{PoseidonSpec, POSEIDON_RATE, POSEIDON_WIDTH};
 use crate::circuit::modules::poseidon::PoseidonChip;
-use crate::circuit::modules::elgamal::{ElGamalCipher, ElGamalVariablesSer};
+use crate::circuit::modules::elgamal::ElGamalCipher;
 use crate::circuit::modules::Module;
 use crate::graph::modules::POSEIDON_LEN_GRAPH;
 use halo2_proofs::plonk::*;
 use halo2_proofs::poly::commitment::{CommitmentScheme, ParamsProver};
 use halo2_proofs::poly::kzg::{
-    commitment::ParamsKZG,
-    strategy::SingleStrategy as KZGSingleStrategy,
+    commitment::ParamsKZG, strategy::SingleStrategy as KZGSingleStrategy,
 };
 use halo2curves::bn256::{Bn256, Fr, G1Affine, Fq, G1};
 use halo2curves::ff::{FromUniformBytes, PrimeField};
@@ -17,10 +16,142 @@ use crate::pfsys::{vecu64_to_field, field_to_vecu64};
 
 use crate::tensor::TensorType;
 use wasm_bindgen::prelude::*;
+use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::ser::SerializeStruct;
+use rand::{CryptoRng,RngCore};
+use halo2curves::CurveAffine;
+use halo2curves::group::cofactor::CofactorCurveAffine;
+use halo2curves::group::{Curve, Group};
+use halo2_proofs::arithmetic::Field;
+use std::ops::MulAssign;
 
 use console_error_panic_hook;
 
 pub use wasm_bindgen_rayon::init_thread_pool;
+
+#[derive(Debug, Clone, PartialEq)]
+/// The variables used in the ElGamal circuit.
+pub struct ElGamalVariables {
+    /// The randomness used in the encryption.
+    pub r: Fr,
+    /// The public key.
+    pub pk: G1Affine,
+    /// The secret key.
+    pub sk: Fr,
+    /// The window size used in the ECC chip.
+    pub window_size: usize,
+    /// The auxiliary generator used in the ECC chip.
+    pub aux_generator: G1Affine,
+}
+
+impl Serialize for ElGamalVariables {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let r: [u64; 4] = field_to_vecu64(&self.r);
+        let sk: [u64; 4] = field_to_vecu64(&self.sk);
+
+        let aux_generator: [[u64; 4]; 2] = [
+            field_to_vecu64(&self.aux_generator.x),
+            field_to_vecu64(&self.aux_generator.y),
+        ];
+
+        let pk: [[u64; 4]; 2] = [field_to_vecu64(&self.pk.x), field_to_vecu64(&self.pk.y)];
+
+        let mut state = serializer.serialize_struct("ElGamalVariables", 4)?;
+        state.serialize_field("r", &r)?;
+        state.serialize_field("sk", &sk)?;
+        state.serialize_field("pk", &pk)?;
+        state.serialize_field("aux_generator", &aux_generator)?;
+        state.serialize_field("window_size", &self.window_size)?;
+
+        state.end()
+    }
+}
+
+/// Wasm based serializing and deserailizing for ElGamalVariables
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ElGamalVariablesSer {
+    ///
+    pub r: [u64; 4],
+    ///
+    pub sk: [u64; 4],
+    ///
+    pub pk: [[u64; 4]; 2],
+    ///
+    pub aux_generator: [[u64; 4]; 2],
+    ///
+    pub window_size: usize, 
+}
+
+impl<'de> Deserialize<'de> for ElGamalVariables {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+
+        let var_ser: ElGamalVariablesSer = Deserialize::deserialize(deserializer)?;
+
+        Ok(ElGamalVariables {
+            r: Fr::from_raw(var_ser.r),
+            pk: G1Affine {
+                x: Fq::from_raw(var_ser.pk[0]),
+                y: Fq::from_raw(var_ser.pk[1]),
+            },
+            sk: Fr::from_raw(var_ser.sk),
+            window_size: var_ser.window_size,
+            aux_generator: G1Affine {
+                x: Fq::from_raw(var_ser.aux_generator[0]),
+                y: Fq::from_raw(var_ser.aux_generator[1]),
+            },
+        })
+    }
+}
+impl Default for ElGamalVariables {
+    fn default() -> Self {
+        Self {
+            r: Fr::zero(),
+            pk: G1Affine::identity(),
+            sk: Fr::zero(),
+            window_size: 4,
+            aux_generator: G1Affine::identity(),
+        }
+    }
+}
+
+impl ElGamalVariables {
+    /// Create new variables.
+    pub fn new(r: Fr, pk: G1Affine, sk: Fr, window_size: usize, aux_generator: G1Affine) -> Self {
+        Self {
+            r,
+            pk,
+            sk,
+            window_size,
+            aux_generator,
+        }
+    }
+
+    /// Generate random variables.
+    pub fn gen_random<R: CryptoRng + RngCore>(mut rng: &mut R) -> Self {
+        // get a random element from the scalar field
+        let sk = Fr::random(&mut rng);
+
+        // compute secret_key*generator to derive the public key
+        // With BN256, we create the private key from a random number. This is a private key value (sk
+        // and a public key mapped to the G2 curve:: pk=sk.G2
+        let mut pk = G1::generator();
+        pk.mul_assign(sk);
+
+        Self {
+            r: Fr::random(&mut rng),
+            pk: pk.to_affine(),
+            sk,
+            window_size: 4,
+            aux_generator: <G1Affine as CurveAffine>::CurveExt::random(rng).to_affine(),
+        }
+    }
+}
 
 #[wasm_bindgen]
 /// Initialize panic hook for wasm
@@ -64,21 +195,21 @@ pub fn elgamalGenRandom(
     let seed: &[u8] = &rng;  
     let mut rng = StdRng::from_seed(seed.try_into().unwrap()); 
 
-    let output = crate::circuit::modules::elgamal::ElGamalVariables::gen_random(&mut rng);
+    let output = ElGamalVariables::gen_random(&mut rng);
 
-    let output= ElGamalVariablesSer {
-        r: field_to_vecu64(&output.r),
-        sk: field_to_vecu64(&output.sk),
-        pk: [
-            field_to_vecu64(&output.pk.x),
-            field_to_vecu64(&output.pk.y),
-        ],
-        window_size: output.window_size,
-        aux_generator: [
-            field_to_vecu64(&output.aux_generator.x),
-            field_to_vecu64(&output.aux_generator.y),
-        ]
-    };
+    // let output= ElGamalVariablesSer {
+    //     r: field_to_vecu64(&output.r),
+    //     sk: field_to_vecu64(&output.sk),
+    //     pk: [
+    //         field_to_vecu64(&output.pk.x),
+    //         field_to_vecu64(&output.pk.y),
+    //     ],
+    //     window_size: output.window_size,
+    //     aux_generator: [
+    //         field_to_vecu64(&output.aux_generator.x),
+    //         field_to_vecu64(&output.aux_generator.y),
+    //     ]
+    // };
 
     serde_json::to_vec(&output).unwrap()
 }

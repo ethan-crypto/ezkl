@@ -2,7 +2,8 @@
 #[cfg(test)]
 mod wasm32 {
     use ark_std::test_rng;
-    use ezkl::circuit::modules::elgamal::{ElGamalVariables, ElGamalVariablesSer};
+    use ezkl::circuit::modules::elgamal::ElGamalVariablesSer;
+    use ezkl::wasm::ElGamalVariables;
     use ezkl::circuit::modules::poseidon::spec::{PoseidonSpec, POSEIDON_RATE, POSEIDON_WIDTH};
     use ezkl::circuit::modules::poseidon::PoseidonChip;
     use ezkl::circuit::modules::Module;
@@ -38,21 +39,21 @@ mod wasm32 {
         // Use the seed to generate ElGamal variables via WASM function
         let wasm_output = elgamalGenRandom(wasm_seed);
     
-        let wasm_vars: ElGamalVariablesSer = serde_json::from_slice(&wasm_output[..]).unwrap();
+        let wasm_vars: ElGamalVariables = serde_json::from_slice(&wasm_output[..]).unwrap();
         
-        let wasm_vars = ElGamalVariables {
-            r: Fr::from_raw(wasm_vars.r),
-            pk: G1Affine {
-                x: Fq::from_raw(wasm_vars.pk[0]),
-                y: Fq::from_raw(wasm_vars.pk[1]),
-            },
-            sk: Fr::from_raw(wasm_vars.sk),
-            window_size: wasm_vars.window_size,
-            aux_generator: G1Affine {
-                x: Fq::from_raw(wasm_vars.aux_generator[0]),
-                y: Fq::from_raw(wasm_vars.aux_generator[1]),
-            }
-        };
+        // let wasm_vars = ElGamalVariables {
+        //     r: Fr::from_raw(wasm_vars.r),
+        //     pk: G1Affine {
+        //         x: Fq::from_raw(wasm_vars.pk[0]),
+        //         y: Fq::from_raw(wasm_vars.pk[1]),
+        //     },
+        //     sk: Fr::from_raw(wasm_vars.sk),
+        //     window_size: wasm_vars.window_size,
+        //     aux_generator: G1Affine {
+        //         x: Fq::from_raw(wasm_vars.aux_generator[0]),
+        //         y: Fq::from_raw(wasm_vars.aux_generator[1]),
+        //     }
+        // };
         
         // Use the same seed to generate ElGamal variables directly
         let mut rng_from_seed = StdRng::from_seed(seed);
