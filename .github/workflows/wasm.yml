@@ -33,6 +33,7 @@ jobs:
       - name: Build wasm files for both web and nodejs compilation targets
         run: |
           wasm-pack build --target nodejs --out-dir ./pkg/nodejs . -- -Z build-std="panic_abort,std"
+          wasm-pack build --target web --out-dir ./pkg/mobile . -- -Z build-std="panic_abort,std"
           wasm-pack build --target web --out-dir ./pkg/web . -- -Z build-std="panic_abort,std" --features web
       - name: Create package.json in pkg folder
         shell: bash
@@ -47,6 +48,10 @@ jobs:
               "nodejs/ezkl.js",
               "nodejs/ezkl.d.ts",
               "nodejs/package.json",
+              "mobile/ezkl_bg.wasm",
+              "mobile/ezkl.js",
+              "mobile/ezkl.d.ts",
+              "mobile/package.json",
               "web/ezkl_bg.wasm",
               "web/ezkl.js",
               "web/ezkl.d.ts",
@@ -66,6 +71,7 @@ jobs:
         run: |
           echo "export const nodejs: typeof import('./nodejs/ezkl');" >> pkg/ezkl.d.ts
           echo "export const web: typeof import('./web/ezkl');" >> pkg/ezkl.d.ts
+          echo "export const mobile: typeof import('./mobile/ezkl');" >> pkg/ezkl.d.ts
 
       - name: Replace memory definition in nodejs
         run: |
