@@ -1,7 +1,7 @@
 name: Rust
 on:
   push:
-    branches: ["main"]
+    branches: ["test-js-setup"]
     paths-ignore:
       - "README.md"
       - "cla.md"
@@ -19,6 +19,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  
+  setup-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use pnpm 8
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      - name: Use Node.js 18.12.1
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.12.1'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: |
+          pnpm install --no-frozen-lockfile
+        env:
+          CI: false
+          NODE_ENV: development
   build:
     runs-on: ubuntu-latest
 
