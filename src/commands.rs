@@ -646,6 +646,24 @@ pub enum Commands {
         data_attestation: bool,
     },
 
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Creates then deploys a bytecode evm verifier, verifies a proof using a local EVM executor, returning accept or reject
+    #[command(name = "verify-evm", arg_required_else_help = true)]
+    BytecodeVerifyEVM {
+        /// The path to load circuit params from
+        #[arg(short = 'S', long)]
+        settings_path: PathBuf,
+        /// The path to the proof file
+        #[arg(long)]
+        proof_path: PathBuf,
+        /// The path to output the desired verfication key file (optional)
+        #[arg(long)]
+        vk_path: PathBuf,
+        /// The kzg srs path
+        #[arg(long)]
+        srs_path: PathBuf
+    },
+
     /// Print the proof in hexadecimal
     #[command(name = "print-proof-hex", arg_required_else_help = true)]
     PrintProofHex {

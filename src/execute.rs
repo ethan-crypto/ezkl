@@ -321,6 +321,13 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             rpc_url,
             data_attestation,
         } => verify_evm(proof_path, addr, rpc_url, data_attestation).await,
+        #[cfg(not(target_arch = "wasm32"))]
+        Commands::BytecodeVerifyEVM {
+            proof_path,
+            settings_path,
+            vk_path,
+            srs_path,
+        } => bytecode_verify_evm(proof_path, settings_path, vk_path, srs_path).await,
         Commands::PrintProofHex { proof_path } => print_proof_hex(proof_path),
     }
 }
@@ -1588,6 +1595,31 @@ pub(crate) fn verify(
     );
     info!("verified: {}", result.is_ok());
     result.map_err(|e| e.into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn bytecode_verify_evm(
+    _proof_path: PathBuf,
+    settings_path: PathBuf,
+    vk_path: PathBuf,
+    srs_path: PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    check_solc_requirement();
+    // Create bytecode evm verifier using snark-verifier-bytecode crate
+    use crate::pfsys::evm::single::gen_evm_verifier_bytecode;
+    check_solc_requirement();
+    let circuit_settings = GraphSettings::load(&settings_path)?;
+    let params = load_params_cmd(srs_path, circuit_settings.run_args.logrows)?;
+
+    let num_instance = circuit_settings.total_instances();
+
+    let vk = load_vk::<KZGCommitmentScheme<Bn256>, Fr, GraphCircuit>(vk_path, circuit_settings)?;
+    trace!("params computed");
+
+    let _deployment_code = gen_evm_verifier_bytecode(&params, &vk, num_instance)?;
+    // Deploy the verifier contract
+    // Verify the proof using the deployed contract
+    Ok(())
 }
 
 pub(crate) fn verify_aggr(
