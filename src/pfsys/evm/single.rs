@@ -64,7 +64,7 @@ pub fn gen_evm_verifier_bytecode(
     params: &ParamsKZG<Bn256>,
     vk: &VerifyingKey<G1Affine>,
     num_instance: Vec<usize>,
-) -> Result<String, SimpleError> {
+) -> Result<Vec<u8>, SimpleError> {
     let protocol = compileB(
         params,
         vk,
@@ -82,7 +82,7 @@ pub fn gen_evm_verifier_bytecode(
     PlonkVerifierB::verify(&vk, &protocol, &instances, &proof)
         .map_err(|_| SimpleError::ProofVerify)?;
 
-    let bytecode = &loader.bytecode();
+    let code = loader.deployment_code();
 
-    Ok(bytecode.clone())
+    Ok(code)
 }

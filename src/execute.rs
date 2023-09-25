@@ -1599,7 +1599,7 @@ pub(crate) fn verify(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn bytecode_verify_evm(
-    _proof_path: PathBuf,
+    proof_path: PathBuf,
     settings_path: PathBuf,
     vk_path: PathBuf,
     srs_path: PathBuf,
@@ -1616,10 +1616,13 @@ pub(crate) async fn bytecode_verify_evm(
     let vk = load_vk::<KZGCommitmentScheme<Bn256>, Fr, GraphCircuit>(vk_path, circuit_settings)?;
     trace!("params computed");
 
-    let _deployment_code = gen_evm_verifier_bytecode(&params, &vk, num_instance)?;
-    // Deploy the verifier contract
-    // Verify the proof using the deployed contract
-    Ok(())
+    let code = gen_evm_verifier_bytecode(&params, &vk, num_instance)?;
+    let deployment_code = DeploymentCode{code};
+
+    // load proof
+    let proof = Snark::load::<KZGCommitmentScheme<Bn256>>(&proof_path)?;
+
+    evm_verify(deployment_code, proof)
 }
 
 pub(crate) fn verify_aggr(
