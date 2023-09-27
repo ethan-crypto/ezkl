@@ -648,7 +648,7 @@ pub enum Commands {
 
     #[cfg(not(target_arch = "wasm32"))]
     /// Creates then deploys a bytecode evm verifier, verifies a proof using a local EVM executor, returning accept or reject
-    #[command(name = "verify-evm", arg_required_else_help = true)]
+    #[command(name = "bytecode-verify-evm", arg_required_else_help = true)]
     BytecodeVerifyEVM {
         /// The path to load circuit params from
         #[arg(short = 'S', long)]
