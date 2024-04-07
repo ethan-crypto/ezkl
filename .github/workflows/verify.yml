@@ -41,7 +41,6 @@ jobs:
           cd in-browser-evm-verifier
           pnpm install
           pnpm run build
-          pnpm publish
       - name: Zip the package
         run: |
           cd in-browser-evm-verifier
