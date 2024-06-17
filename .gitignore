@@ -50,3 +50,10 @@ timingData.json
 !tests/wasm/vk.key
 docs/python/build
 !tests/wasm/vk_aggr.key
+conv_relu/
+conv_sigmoid/
+mlp_relu/
+mlp_sigmoid/
+vk.abi
+conv_input.json
+mlp_input.json
